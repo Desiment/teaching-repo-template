@@ -1,0 +1,24 @@
+[submodule "src/configuration/lecturenotes"]
+	path = src/configuration/lecturenotes
+	url = https://github.com/Desiment/latex-lecturenotes.git
+[submodule "src/configuration/practices"]
+	path = src/configuration/practices
+	url = https://github.com/Desiment/latex-practices.git
+[submodule "src/configuration/packages/flsuite"]
+	path = src/configuration/packages/flsuite
+	url = https://github.com/Desiment/latex-flsuite.git
+[submodule "src/configuration/packages/tssuite"]
+	path = src/configuration/packages/tssuite
+	url = https://github.com/Desiment/latex-tssuite.git
+[submodule "src/configuration/packages/refsuite"]
+	path = src/configuration/packages/refsuite
+	url = https://github.com/Desiment/latex-refsuite.git
+[submodule "src/configuration/packages/xamsmath"]
+	path = src/configuration/packages/xamsmath
+	url = https://github.com/Desiment/latex-xamsmath.git
+[submodule "src/configuration/packages/luaboolean"]
+	path = src/configuration/packages/luaboolean
+	url = https://github.com/Desiment/latex-luaboolean.git
+[submodule "src/configuration/packages/luatableprint"]
+	path = src/configuration/packages/luatableprint
+	url = https://github.com/Desiment/latex-luatableprint.git

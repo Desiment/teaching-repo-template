@@ -1,0 +1,43 @@
+## Build directories
+project/build/*
+!project/build/.gitkeep
+src/**/build/
+**/.build/
+
+## LaTeX auxiliary files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.ilg
+*.ind
+*.idx
+*.log
+*.lof
+*.lot
+*.mmz
+*.mmz.log
+*.nav
+*.out
+*.run.xml
+*.snm
+*.synctex.gz
+*.thlist
+*.toc
+*.vrb
+*.xsim
+
+## Minted and generated helpers
+_minted*/
+*.pyg
+*.data.minted
+
+## Editors
+*.bak
+*.swp
+*~
+
+## Local OpenCode config
+.opencode/

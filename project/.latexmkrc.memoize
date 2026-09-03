@@ -1,0 +1,90 @@
+use vars qw($Pbase $aux_dir1 $rule $Pdest $aux_dir);
+
+our @memoize_extract = ('memoize-extract.pl');
+our @memoize_clean = ('memoize-clean.pl');
+push @generated_exts, 'mmz', 'mmz.log';
+
+add_hook('after_xlatex_analysis', \&mmz_analyze);
+add_hook('after_main_pdf', \&mmz_extract_new);
+# add_hook('cleanup', \&mmz_cleanup);
+
+my $mmz_has_new = '';
+
+sub mmz_analyze {
+    use strict;
+    my $base = $$Pbase;
+    my $mmz_file = "$aux_dir1$base.mmz";
+    $mmz_has_new = '';
+
+    if (! -e $mmz_file) {
+        return 0;
+    }
+
+    if (! test_gen_file_time($mmz_file)) {
+        warn "mmz_analyze: Mmz file '$mmz_file' exists, but was not generated on this run.\n";
+        return 0;
+    }
+
+    my $mmz_fh = undef;
+    if (! open($mmz_fh, '<', $mmz_file)) {
+        warn "mmz_analyze: Cannot read '$mmz_file': $!\n";
+        return 1;
+    }
+
+    my @externs = ();
+    my @dirs = ();
+    while (<$mmz_fh>) {
+        s/\s*$//;
+        if (/^\\mmzNewExtern\s+{([^}]+)}/) {
+            push @externs, "$aux_dir1$1";
+        }
+        elsif (/^\\mmzPrefix\s+{([^}]+)}/) {
+            if ($1 =~ m{^(.*)/[^/]*}) {
+                push @dirs, "$aux_dir1$1";
+            }
+        }
+    }
+    close $mmz_fh;
+
+    foreach (@dirs) {
+        mkdir $_ if ! -e;
+    }
+
+    rdb_ensure_files_here(@externs);
+    rdb_remove_files($rule, "$mmz_file.log");
+
+    if (@externs) {
+        $mmz_has_new = $mmz_file;
+    }
+    return 0;
+}
+
+sub mmz_extract_new {
+    use strict;
+    if ($mmz_has_new eq '') {
+        return 0;
+    }
+
+    my $mmz_file = $mmz_has_new;
+    my ($mmz_file_no_path, $path) = fileparse($mmz_file);
+    my $pdf_file = $$Pdest;
+    local $ENV{TEXMF_OUTPUT_DIRECTORY} = $aux_dir;
+    my @cmd = (@memoize_extract, '--format', 'latex', '--pdf', $pdf_file, $mmz_file_no_path);
+
+    if (! -e $pdf_file) {
+        warn "mmz_extract_new: Cannot extract memoized externs because no PDF was generated.\n";
+        return 1;
+    }
+    elsif (! test_gen_file($pdf_file)) {
+        warn "mmz_extract_new: Pdf file '$pdf_file' exists, but was not generated on this run.\n";
+        return 1;
+    }
+
+    return system @cmd;
+}
+
+sub mmz_cleanup {
+    use strict;
+    my @cmd = (@memoize_clean, '--all', '--yes', '--prefix', $aux_dir, "$aux_dir1$$Pbase.mmz");
+    return system @cmd;
+}

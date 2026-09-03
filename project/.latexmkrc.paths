@@ -1,0 +1,8 @@
+ensure_path('TEXINPUTS', 'src/configuration//');
+ensure_path('TEXINPUTS', './');
+
+ensure_path('LUAINPUTS', 'src/configuration//');
+ensure_path('LUAINPUTS', './');
+
+ensure_path('BIBINPUTS', 'src/configuration//');
+ensure_path('BIBINPUTS', './');
