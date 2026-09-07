@@ -10,8 +10,10 @@ help:
       'Usage:' \
       '  just' \
       '  just new <kind> [name] [--no-edit]' \
-      '  just build <file> [latexmk flags]' \
-      '  just preview <file> [latexmk flags]' \
+      '  just build <file|kind number|lecture> [latexmk flags]' \
+      '  just <kind> <number> [latexmk flags]' \
+      '  just clean [file|kind number|lecture]' \
+      '  just distclean [file|kind number|lecture]' \
       '' \
       'Create practice files:' \
       '  just new seminar [--no-edit]      Create and edit the next seminar sheet' \
@@ -25,19 +27,24 @@ help:
       '                                   Create, include, and edit a lecture chapter file' \
       '' \
       'Build and preview:' \
+      '  just build seminar 1' \
+      '                                   Build src/seminars/seminar-01.tex' \
       '  just build src/seminars/seminar-01.tex' \
       '                                   Build from the TeX file directory' \
-      '  just build src/seminars/seminar-01.tex --no-solutions' \
+      '  just build seminar 1 --no-solutions' \
       '                                   Build without printing solutions' \
-      '  just build src/assessments/quiz-01.tex --print' \
+      '  just build quiz 1 --print' \
       '                                   Build quiz print imposition' \
-      '  just preview src/lectures/notes.tex' \
-      '                                   Build and preview from the TeX file directory' \
+      '  just seminar 1' \
+      '                                   Build and open seminar-01.pdf' \
+      '  just build lecture' \
+      '                                   Build src/lectures/notes.tex' \
       '' \
       'Helper utilities:' \
       '  just init                         Initialize Git submodules' \
       '  just sync-skills                  Sync configuration package OpenCode skills' \
-      '  just clean                        Remove LaTeX auxiliary files' \
+      '  just clean                        Clean auxiliary files for all materials' \
+      '  just clean seminar 1              Clean one material target' \
       '  just distclean                    Remove generated LaTeX output'
 
 # Create a new practice sheet or lecture chapter file
@@ -90,21 +97,13 @@ new kind *args:
     echo "Created $file"; \
     if [ "$edit" -eq 1 ]; then cd "$dir" && ${EDITOR:?EDITOR is not set} "$filename"; fi
 
-# Build a TeX file from its own directory
-build file *flags:
-    @file="{{ file }}"; \
-    dir=$(dirname -- "$file"); \
-    filename=$(basename -- "$file"); \
-    cd -- "$dir"; \
-    latexmk {{ flags }} "$filename"
+# Build a TeX target from its own directory
+build target *args:
+    @scripts/tex-target.sh build "{{ target }}" {{ args }}
 
-# Build and preview a TeX file from its own directory
-preview file *flags:
-    @file="{{ file }}"; \
-    dir=$(dirname -- "$file"); \
-    filename=$(basename -- "$file"); \
-    cd -- "$dir"; \
-    latexmk -pv {{ flags }} "$filename"
+# Build and open a TeX target with xdg-open
+preview target *args:
+    @scripts/tex-target.sh open "{{ target }}" {{ args }}
 
 # Initialize Git submodules
 init:
@@ -142,40 +141,38 @@ sync-skills:
     done; \
     printf 'Synced %s OpenCode skill symlinks.\n' "$count"
 
-# Build a numbered seminar
+# Build and open a numbered seminar
 seminar num *flags:
-    @just build "src/seminars/seminar-{{ num }}.tex" {{ flags }}
+    @scripts/tex-target.sh open seminar "{{ num }}" {{ flags }}
 
-# Build a numbered homework
+# Build and open a numbered homework
 homework num *flags:
-    @just build "src/homeworks/homework-{{ num }}.tex" {{ flags }}
+    @scripts/tex-target.sh open homework "{{ num }}" {{ flags }}
 
-# Build lecture notes or a named lecture file
-lecture name="notes" *flags:
-    @just build "src/lectures/{{ name }}.tex" {{ flags }}
+# Build and open lecture notes
+lecture *flags:
+    @scripts/tex-target.sh open lecture {{ flags }}
 
-# Build a numbered assessment
+# Build and open a numbered assessment
 assessment num *flags:
-    @just build "src/assessments/assessment-{{ num }}.tex" {{ flags }}
+    @scripts/tex-target.sh open assessment "{{ num }}" {{ flags }}
 
-# Build a numbered quiz
+# Build and open a numbered quiz
 quiz num *flags:
-    @just build "src/assessments/quiz-{{ num }}.tex" {{ flags }}
+    @scripts/tex-target.sh open quiz "{{ num }}" {{ flags }}
 
-# Build a numbered test
+# Build and open a numbered test
 test num *flags:
-    @just build "src/assessments/test-{{ num }}.tex" {{ flags }}
+    @scripts/tex-target.sh open test "{{ num }}" {{ flags }}
 
-# Build a numbered quiz using print mode
+# Build and open a numbered quiz using print mode
 quiz-print num *flags:
-    @just build "src/assessments/quiz-{{ num }}.tex" --print {{ flags }}
+    @scripts/tex-target.sh open quiz "{{ num }}" --print {{ flags }}
 
 # Remove LaTeX auxiliary files
-clean:
-    latexmk -c
+clean *target:
+    @scripts/tex-target.sh clean {{ target }}
 
 # Remove all generated LaTeX output
-distclean:
-    latexmk -C
-    rm -rf project/build/*
-    find project/pdf -mindepth 1 ! -name .gitkeep -delete
+distclean *target:
+    @scripts/tex-target.sh distclean {{ target }}

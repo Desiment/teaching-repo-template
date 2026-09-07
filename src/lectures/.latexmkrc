@@ -2,8 +2,8 @@
 # This is a hint for editors; LuaLaTeX is enforced by project/.latexmkrc.make.
 $pdf_mode = 4;
 
-ensure_path('LUAINPUTS', '../../');
 ensure_path('LUAINPUTS', '../configuration//');
+ensure_path('LUAINPUTS', '../../');
 ensure_path('TEXINPUTS', '../../');
 ensure_path('TEXINPUTS', '../configuration//');
 ensure_path('BIBINPUTS', '../../');
