@@ -8,6 +8,7 @@ usage() {
     '  scripts/tex-target.sh build <kind> <number> [latexmk flags]' \
     '  scripts/tex-target.sh build lecture [latexmk flags]' \
     '  scripts/tex-target.sh open <target> [latexmk flags]' \
+    '  scripts/tex-target.sh publish <target> [latexmk flags] [--suffix name]' \
     '  scripts/tex-target.sh clean [target]' \
     '  scripts/tex-target.sh distclean [target]' >&2
 }
@@ -108,6 +109,107 @@ open_target() {
   xdg-open "$pdf"
 }
 
+publish_dir_for() {
+  local file="$1"
+  case "$file" in
+    src/seminars/*)
+      printf 'project/files/seminars\n'
+      ;;
+    src/homeworks/*)
+      printf 'project/files/homeworks\n'
+      ;;
+    src/assessments/*)
+      printf 'project/files/assessments\n'
+      ;;
+    src/lectures/notes.tex)
+      printf 'project/files\n'
+      ;;
+    *)
+      die "No publish destination for: $file"
+      ;;
+  esac
+}
+
+append_suffix() {
+  local filename="$1"
+  local suffix="$2"
+  local base="${filename%.pdf}"
+  if [ -n "$suffix" ]; then
+    printf '%s-%s.pdf\n' "$base" "$suffix"
+  else
+    printf '%s.pdf\n' "$base"
+  fi
+}
+
+parse_publish_args() {
+  publish_suffix=''
+  publish_suffix_explicit=0
+  publish_flags=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --suffix)
+        shift
+        [ "$#" -gt 0 ] || die '--suffix requires a value.'
+        publish_suffix="$1"
+        publish_suffix_explicit=1
+        ;;
+      --suffix=*)
+        publish_suffix="${1#--suffix=}"
+        publish_suffix_explicit=1
+        ;;
+      *)
+        publish_flags+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [ "$publish_suffix_explicit" -eq 1 ]; then
+    [ -n "$publish_suffix" ] || die 'Publish suffix cannot be empty.'
+    [[ "$publish_suffix" != */* ]] || die 'Publish suffix cannot contain /.'
+    return
+  fi
+
+  local print=0 solution_suffix='' flag
+  for flag in "${publish_flags[@]}"; do
+    case "$flag" in
+      --print) print=1 ;;
+      --solutions) solution_suffix='solutions' ;;
+      --no-solutions) solution_suffix='no-solutions' ;;
+    esac
+  done
+
+  local suffix_parts=()
+  [ "$print" -eq 1 ] && suffix_parts+=(print)
+  [ -n "$solution_suffix" ] && suffix_parts+=("$solution_suffix")
+
+  if [ "${#suffix_parts[@]}" -gt 0 ]; then
+    local IFS=-
+    publish_suffix="${suffix_parts[*]}"
+  fi
+}
+
+publish_target() {
+  local file="$1"
+  shift
+  local source_pdf publish_dir publish_name destination
+
+  parse_publish_args "$@"
+  run_latexmk "$file" "${publish_flags[@]}"
+
+  source_pdf=$(pdf_path_for "$file")
+  [ -f "$source_pdf" ] || die "Expected PDF was not created: $source_pdf"
+
+  publish_dir=$(publish_dir_for "$file")
+  publish_name=$(append_suffix "$(basename -- "$source_pdf")" "$publish_suffix")
+  destination="$publish_dir/$publish_name"
+
+  mkdir -p "$publish_dir"
+  cp "$source_pdf" "$destination"
+  printf 'Published %s\n' "$destination"
+}
+
 all_targets() {
   shopt -s nullglob
   local files=( \
@@ -153,6 +255,12 @@ main() {
       resolved_args=()
       resolve_target "$@"
       open_target "$resolved_file" "${resolved_args[@]}"
+      ;;
+    publish)
+      [ "$#" -gt 0 ] || die 'Usage: just publish <target> [latexmk flags] [--suffix name]'
+      resolved_args=()
+      resolve_target "$@"
+      publish_target "$resolved_file" "${resolved_args[@]}"
       ;;
     clean)
       if [ "$#" -eq 0 ]; then

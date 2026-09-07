@@ -12,6 +12,7 @@ help:
       '  just new <kind> [name] [--no-edit]' \
       '  just build <file|kind number|lecture> [latexmk flags]' \
       '  just <kind> <number> [latexmk flags]' \
+      '  just publish <kind number|lecture> [latexmk flags] [--suffix name]' \
       '  just clean [file|kind number|lecture]' \
       '  just distclean [file|kind number|lecture]' \
       '' \
@@ -39,6 +40,12 @@ help:
       '                                   Build and open seminar-01.pdf' \
       '  just build lecture' \
       '                                   Build src/lectures/notes.tex' \
+      '  just publish seminar 1' \
+      '                                   Copy seminar-01.pdf to project/files/seminars' \
+      '  just publish quiz 1 --print' \
+      '                                   Publish quiz-01-print.pdf' \
+      '  just publish lecture --suffix week-03' \
+      '                                   Publish notes-week-03.pdf' \
       '' \
       'Helper utilities:' \
       '  just init                         Initialize Git submodules' \
@@ -104,6 +111,10 @@ build target *args:
 # Build and open a TeX target with xdg-open
 preview target *args:
     @scripts/tex-target.sh open "{{ target }}" {{ args }}
+
+# Build and copy a target PDF into project/files
+publish target *args:
+    @scripts/tex-target.sh publish "{{ target }}" {{ args }}
 
 # Initialize Git submodules
 init:
