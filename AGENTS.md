@@ -22,11 +22,11 @@
 ## Commands
 - `just` prints the repo command help.
 - `just init` initializes/updates the public submodules under `src/configuration/`.
-- The optional private `.ai` submodule is intentionally not initialized by `just`.
+- The optional private `.bundle` submodule is intentionally not initialized by `just`.
 - Run `scripts/ai-sync sync` from the repository root to link skills from
-  `src/configuration/**/.skills/` and `.ai/skills/` into `.opencode/skills/`.
+  `src/configuration/**/.skills/` and `.bundle/skills/` into `.opencode/skills/`.
 - Run `scripts/ai-sync release --workspace <teaching-workspace>` to publish
-  private skill changes and distribute the new `.ai` gitlink through the
+  private skill changes and distribute the new `.bundle` gitlink through the
   template and course repositories.
 - Use `just new <kind> --no-edit` for non-interactive creation: `seminar`, `homework`, `assessment`, `quiz`, or `test`.
 - Use `just new lecture chapter-01/topic.tex --no-edit` for lecture chapter files; the path is relative to `src/lectures/chapters/`.
@@ -36,7 +36,7 @@
 - Clean aux files with `just clean`; remove generated LaTeX output with `just distclean`.
 
 ## OpenCode Skills
-- Run `scripts/ai-sync sync` after `just init`, after submodule updates, or after adding/removing skills under configuration packages or `.ai/skills/`.
+- Run `scripts/ai-sync sync` after `just init`, after submodule updates, or after adding/removing skills under configuration packages or `.bundle/skills/`.
 - OpenCode loads skills at startup; restart OpenCode after syncing or editing `.opencode/skills/`.
 - Skill sources under `src/configuration/**/.skills/` are part of configuration packages/submodules; do not patch them during course-material work unless explicitly instructed to maintain that package.
 - `.opencode/skills/` is local project OpenCode configuration and may be modified for course-specific guidance. Sync-created entries are symlinks; replace a symlink with a real skill directory before local customization if you do not want to modify the source package.

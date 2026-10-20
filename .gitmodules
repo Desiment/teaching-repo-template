@@ -22,7 +22,7 @@
 [submodule "src/configuration/packages/luatableprint"]
 	path = src/configuration/packages/luatableprint
 	url = https://github.com/Desiment/latex-luatableprint.git
-[submodule ".ai"]
-	path = .ai
-	url = https://github.com/Desiment/teaching-ai-infrastructure.git
+[submodule ".bundle"]
+	path = .bundle
+	url = https://github.com/Desiment/teaching-bundle.git
 	branch = main

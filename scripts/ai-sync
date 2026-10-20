@@ -57,7 +57,7 @@ ensure_clean() {
 sync_skills() {
   local workspace="$1"
   local skills_dir="$workspace/.opencode/skills"
-  local private_skills="$workspace/.ai/skills"
+  local private_skills="$workspace/.bundle/skills"
   local skill_md skill_dir skill_name source target current count
   declare -A sources=()
 
@@ -160,11 +160,11 @@ update_template() {
   git -C "$template" fetch origin main
   git -C "$template" switch main
   git -C "$template" merge --ff-only origin/main
-  git -C "$template" submodule update --init .ai
-  ensure_clean "$template/.ai"
-  git -C "$template/.ai" fetch origin main
-  git -C "$template/.ai" checkout --detach "$private_commit"
-  git -C "$template" add -- .ai
+  git -C "$template" submodule update --init .bundle
+  ensure_clean "$template/.bundle"
+  git -C "$template/.bundle" fetch origin main
+  git -C "$template/.bundle" checkout --detach "$private_commit"
+  git -C "$template" add -- .bundle
 
   if ! git -C "$template" diff --cached --quiet; then
     short_commit="${private_commit:0:12}"
@@ -185,7 +185,7 @@ merge_course() {
     git -C "$course" merge --abort || true
     die "template merge failed for $course"
   fi
-  git -C "$course" submodule update --init .ai
+  git -C "$course" submodule update --init .bundle
   "$course/scripts/ai-sync" sync --workspace "$course"
   git -C "$course" push origin "$branch"
 }
@@ -202,7 +202,7 @@ release() {
   [ -d "$template/.git" ] || [ -f "$template/.git" ] || die "template checkout not found: $template"
   while IFS= read -r -d '' course; do
     case "$(basename -- "$course")" in
-      teaching-ai-infrastructure|teaching-repo-template) continue ;;
+      teaching-bundle|teaching-repo-template) continue ;;
     esac
     courses+=("$course")
   done < <(find "$workspace" -mindepth 1 -maxdepth 1 -type d \( -name 'hse-*' -o -name 'spbu-*' \) -print0)
@@ -259,7 +259,7 @@ done
 if [ -n "$private_repo" ]; then
   ai_repo="$private_repo"
 else
-  ai_repo="$script_repo/.ai"
+  ai_repo="$script_repo/.bundle"
 fi
 
 case "$command" in

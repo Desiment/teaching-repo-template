@@ -115,7 +115,7 @@ preview target *args:
 publish target *args:
     @scripts/tex-target.sh publish "{{ target }}" {{ args }}
 
-# Initialize public Git submodules. The optional private .ai submodule is
+# Initialize public Git submodules. The optional private .bundle submodule is
 # intentionally left for the user's normal Git submodule workflow.
 init:
     git submodule update --init --recursive -- src/configuration
