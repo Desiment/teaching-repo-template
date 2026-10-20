@@ -99,7 +99,10 @@ sync_skills() {
     current="$(realpath --relative-to="$skills_dir" "$source")"
 
     if [ -L "$target" ]; then
-      [ "$(readlink -- "$target")" = "$current" ] || die "refusing to replace symlink with different source: $target"
+      if [ "$(readlink -- "$target")" != "$current" ]; then
+        rm -- "$target"
+        ln -s -- "$current" "$target"
+      fi
     elif [ -e "$target" ]; then
       die "refusing to replace existing non-symlink: $target"
     else
