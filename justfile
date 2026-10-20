@@ -48,8 +48,8 @@ help:
       '                                   Publish notes-week-03.pdf' \
       '' \
       'Helper utilities:' \
-      '  just init                         Initialize Git submodules' \
-      '  just sync-skills                  Sync configuration package OpenCode skills' \
+      '  just init                         Initialize public Git submodules' \
+      '  just sync-ai                     Sync public and private AI skills' \
       '  just clean                        Clean auxiliary files for all materials' \
       '  just clean seminar 1              Clean one material target' \
       '  just distclean                    Remove generated LaTeX output'
@@ -116,38 +116,59 @@ preview target *args:
 publish target *args:
     @scripts/tex-target.sh publish "{{ target }}" {{ args }}
 
-# Initialize Git submodules
+# Initialize public Git submodules. The optional private .ai submodule is
+# intentionally left for the user's normal Git submodule workflow.
 init:
-    git submodule update --init --recursive
+    git submodule update --init --recursive -- src/configuration
 
-# Sync configuration package OpenCode skills into project-local OpenCode config
-sync-skills:
+# Sync public configuration-package and optional private AI skills into the
+# project-local OpenCode config.
+sync-ai:
     @skills_dir=.opencode/skills; \
     mkdir -p "$skills_dir"; \
-    for link in "$skills_dir"/*; do \
-      [ -L "$link" ] && [ ! -e "$link" ] && rm "$link"; \
-    done; \
-    link_skill() { \
+    declare -A sources=(); \
+    record_skill() { \
       name="$1"; \
       source="$2"; \
-      target="$skills_dir/$name"; \
-      if [ -L "$target" ]; then \
-        current=$(readlink "$target"); \
-        [ "$current" = "$source" ] && return 0; \
-        rm "$target"; \
-      elif [ -e "$target" ]; then \
-        printf '%s\n' "Refusing to replace existing non-symlink: $target" >&2; \
+      if [ -n "${sources[$name]+present}" ]; then \
+        printf 'Skill name conflict for %s: %s and %s\n' "$name" "${sources[$name]}" "$source" >&2; \
         exit 1; \
       fi; \
-      ln -s "$source" "$target"; \
+      sources["$name"]="$source"; \
     }; \
     shopt -s globstar nullglob; \
-    count=0; \
     for skill_dir in src/configuration/**/.skills/*; do \
       [ -d "$skill_dir" ] || continue; \
       [ -f "$skill_dir/SKILL.md" ] || continue; \
       skill_name=$(basename "$skill_dir"); \
-      link_skill "$skill_name" "../../$skill_dir"; \
+      record_skill "$skill_name" "../../$skill_dir"; \
+    done; \
+    if [ -d .ai/skills ]; then \
+      for skill_dir in .ai/skills/*; do \
+        [ -d "$skill_dir" ] || continue; \
+        [ -f "$skill_dir/SKILL.md" ] || continue; \
+        skill_name=$(basename "$skill_dir"); \
+        record_skill "$skill_name" "../../$skill_dir"; \
+      done; \
+    fi; \
+    for link in "$skills_dir"/* "$skills_dir"/.[!.]* "$skills_dir"/..?*; do \
+      [ -L "$link" ] || continue; \
+      skill_name=$(basename "$link"); \
+      [ -n "${sources[$skill_name]+present}" ] || rm "$link"; \
+    done; \
+    count=0; \
+    for skill_name in "${!sources[@]}"; do \
+      source="${sources[$skill_name]}"; \
+      target="$skills_dir/$skill_name"; \
+      if [ -L "$target" ]; then \
+        current=$(readlink "$target"); \
+        [ "$current" = "$source" ] || { printf 'Refusing to replace symlink with different source: %s\n' "$target" >&2; exit 1; }; \
+      elif [ -e "$target" ]; then \
+        printf '%s\n' "Refusing to replace existing non-symlink: $target" >&2; \
+        exit 1; \
+      else \
+        ln -s "$source" "$target"; \
+      fi; \
       count=$((count + 1)); \
     done; \
     printf 'Synced %s OpenCode skill symlinks.\n' "$count"

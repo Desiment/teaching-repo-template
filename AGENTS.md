@@ -21,8 +21,11 @@
 
 ## Commands
 - `just` prints the repo command help.
-- `just init` initializes/updates all submodules.
-- `just sync-skills` links configuration package skills from `src/configuration/**/.skills/` into `.opencode/skills/`.
+- `just init` initializes/updates the public submodules under `src/configuration/`.
+- The optional private `.ai` submodule is intentionally not initialized by `just`.
+- `just sync-ai` links skills from `src/configuration/**/.skills/` and, when
+  available, `.ai/skills/` into `.opencode/skills/`. It also removes stale
+  managed symlinks when a skill or the private submodule is unavailable.
 - Use `just new <kind> --no-edit` for non-interactive creation: `seminar`, `homework`, `assessment`, `quiz`, or `test`.
 - Use `just new lecture chapter-01/topic.tex --no-edit` for lecture chapter files; the path is relative to `src/lectures/chapters/`.
 - Build a specific file with `just build <path> [latexmk flags]`, for example `just build src/seminars/seminar-01.tex`.
@@ -31,7 +34,7 @@
 - Clean aux files with `just clean`; remove generated LaTeX output with `just distclean`.
 
 ## OpenCode Skills
-- Run `just sync-skills` after `just init`, after submodule updates, or after adding/removing skills under configuration packages.
+- Run `just sync-ai` after `just init`, after submodule updates, or after adding/removing skills under configuration packages or `.ai/skills/`.
 - OpenCode loads skills at startup; restart OpenCode after syncing or editing `.opencode/skills/`.
 - Skill sources under `src/configuration/**/.skills/` are part of configuration packages/submodules; do not patch them during course-material work unless explicitly instructed to maintain that package.
 - `.opencode/skills/` is local project OpenCode configuration and may be modified for course-specific guidance. Sync-created entries are symlinks; replace a symlink with a real skill directory before local customization if you do not want to modify the source package.

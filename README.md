@@ -33,12 +33,12 @@ All custom LaTeX classes and packages are GitHub submodules under
 
 ```sh
 just init
-just sync-skills
+just sync-ai
 ```
 
-`just sync-skills` links OpenCode skills from configuration packages into
-`.opencode/skills/`. Restart OpenCode after syncing or editing skills so the
-running session reloads them.
+`just sync-ai` links OpenCode skills from configuration packages and the
+optional private `.ai/skills/` directory into `.opencode/skills/`. Restart
+OpenCode after syncing or editing skills so the running session reloads them.
 
 ## Metadata
 
