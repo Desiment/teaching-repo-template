@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_repo="$(cd -- "$script_dir/.." && pwd)"
 ai_repo=""
 
 die() {
@@ -14,7 +15,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/ai-sync sync [--workspace DIR]
-  scripts/ai-sync release --workspace DIR [--message MESSAGE]
+  scripts/ai-sync release --workspace DIR [--private-repo DIR] [--message MESSAGE]
 
 Commands:
   sync       Link public TeX skills and private AI skills into .opencode/skills.
@@ -185,7 +186,7 @@ merge_course() {
     die "template merge failed for $course"
   fi
   git -C "$course" submodule update --init .ai
-  "$course/.ai/scripts/ai-sync" sync --workspace "$course"
+  "$course/scripts/ai-sync" sync --workspace "$course"
   git -C "$course" push origin "$branch"
 }
 
@@ -197,7 +198,6 @@ release() {
   local course
   local -a courses=()
 
-  ai_repo="$workspace/.ai"
   [ -d "$ai_repo/.git" ] || [ -f "$ai_repo/.git" ] || die "private AI checkout not found: $ai_repo"
   [ -d "$template/.git" ] || [ -f "$template/.git" ] || die "template checkout not found: $template"
   while IFS= read -r -d '' course; do
@@ -227,6 +227,7 @@ command="${1:-sync}"
 shift || true
 workspace="$(workspace_from_script)"
 message='skills: update shared teaching AI skills'
+private_repo=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -240,6 +241,11 @@ while [ "$#" -gt 0 ]; do
       message="$2"
       shift 2
       ;;
+    --private-repo)
+      [ "$#" -ge 2 ] || die 'missing value for --private-repo'
+      private_repo="$(cd -- "$2" && pwd)"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -250,7 +256,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-ai_repo="$workspace/.ai"
+if [ -n "$private_repo" ]; then
+  ai_repo="$private_repo"
+else
+  ai_repo="$script_repo/.ai"
+fi
 
 case "$command" in
   sync)
