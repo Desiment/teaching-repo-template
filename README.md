@@ -71,7 +71,7 @@ just build src/seminars/seminar-01.tex --no-solutions
 just build src/assessments/quiz-01.tex --print
 just preview src/lectures/notes.tex
 
-just sync-skills
+just sync-ai
 ```
 
 `just new ...` prompts for template values and creates the next numbered source
