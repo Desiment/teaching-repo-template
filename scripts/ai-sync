@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ai_repo=""
+
+die() {
+  printf 'ai-sync: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/ai-sync sync [--workspace DIR]
+  scripts/ai-sync release --workspace DIR [--message MESSAGE]
+
+Commands:
+  sync       Link public TeX skills and private AI skills into .opencode/skills.
+  release    Publish private skill changes, update the template gitlink, and
+             merge the template update into all course repositories in DIR.
+
+The release command expects DIR to contain teaching-repo-template and the
+course checkouts. It does not use just and requires clean working trees outside
+the private skills directory.
+EOF
+}
+
+workspace_from_script() {
+  if [ -n "${AI_SYNC_WORKSPACE:-}" ]; then
+    (cd -- "$AI_SYNC_WORKSPACE" && pwd)
+    return
+  fi
+
+  (cd -- "$script_dir/.." && pwd)
+}
+
+git_root() {
+  git -C "$1" rev-parse --show-toplevel 2>/dev/null || true
+}
+
+require_git_root() {
+  local path="$1"
+  local root
+  root="$(git_root "$path")"
+  [ -n "$root" ] || die "not a Git repository: $path"
+  printf '%s\n' "$root"
+}
+
+ensure_clean() {
+  local repo="$1"
+  [ -z "$(git -C "$repo" status --porcelain)" ] || die "working tree is not clean: $repo"
+}
+
+sync_skills() {
+  local workspace="$1"
+  local skills_dir="$workspace/.opencode/skills"
+  local private_skills="$workspace/.ai/skills"
+  local skill_md skill_dir skill_name source target current count
+  declare -A sources=()
+
+  mkdir -p -- "$skills_dir"
+
+  record_skill() {
+    skill_name="$1"
+    source="$2"
+    if [ -n "${sources[$skill_name]+present}" ]; then
+      die "skill name conflict for $skill_name: ${sources[$skill_name]} and $source"
+    fi
+    sources["$skill_name"]="$source"
+  }
+
+  if [ -d "$workspace/src/configuration" ]; then
+    while IFS= read -r -d '' skill_md; do
+      skill_dir="$(dirname -- "$skill_md")"
+      record_skill "$(basename -- "$skill_dir")" "$skill_dir"
+    done < <(find -L "$workspace/src/configuration" -type f -path '*/.skills/*/SKILL.md' -print0)
+  fi
+
+  if [ -d "$private_skills" ]; then
+    while IFS= read -r -d '' skill_md; do
+      skill_dir="$(dirname -- "$skill_md")"
+      record_skill "$(basename -- "$skill_dir")" "$skill_dir"
+    done < <(find -L "$private_skills" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print0)
+  fi
+
+  for target in "$skills_dir"/* "$skills_dir"/.[!.]* "$skills_dir"/..?*; do
+    [ -L "$target" ] || continue
+    skill_name="$(basename -- "$target")"
+    [ -n "${sources[$skill_name]+present}" ] || rm -- "$target"
+  done
+
+  count=0
+  for skill_name in "${!sources[@]}"; do
+    source="${sources[$skill_name]}"
+    target="$skills_dir/$skill_name"
+    current="$(realpath --relative-to="$skills_dir" "$source")"
+
+    if [ -L "$target" ]; then
+      [ "$(readlink -- "$target")" = "$current" ] || die "refusing to replace symlink with different source: $target"
+    elif [ -e "$target" ]; then
+      die "refusing to replace existing non-symlink: $target"
+    else
+      ln -s -- "$current" "$target"
+    fi
+    count=$((count + 1))
+  done
+
+  printf 'Synced %s OpenCode skill symlinks.\n' "$count"
+}
+
+private_branch() {
+  local branch
+  branch="$(git -C "$ai_repo" symbolic-ref --quiet --short HEAD || true)"
+  if [ -n "$branch" ]; then
+    [ "$branch" = main ] || die "private AI repository is on '$branch', expected 'main'"
+    return
+  fi
+
+  git -C "$ai_repo" fetch origin main
+  if git -C "$ai_repo" show-ref --verify --quiet refs/heads/main; then
+    git -C "$ai_repo" switch main
+  else
+    git -C "$ai_repo" switch --track -c main origin/main
+  fi
+}
+
+commit_private_skills() {
+  local message="$1"
+  local private_status
+
+  private_branch
+  private_status="$(git -C "$ai_repo" status --porcelain)"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "${line:3}" in
+      skills/*) ;;
+      *) die "private repository has unrelated changes: ${line:3}" ;;
+    esac
+  done <<< "$private_status"
+
+  git -C "$ai_repo" fetch origin main
+  git -C "$ai_repo" merge --ff-only origin/main
+  git -C "$ai_repo" add -- skills
+  if ! git -C "$ai_repo" diff --cached --quiet; then
+    git -C "$ai_repo" commit -m "$message"
+  fi
+  git -C "$ai_repo" push origin main
+  git -C "$ai_repo" rev-parse HEAD
+}
+
+update_template() {
+  local template="$1"
+  local private_commit="$2"
+  local short_commit
+
+  ensure_clean "$template"
+  git -C "$template" fetch origin main
+  git -C "$template" switch main
+  git -C "$template" merge --ff-only origin/main
+  git -C "$template" submodule update --init .ai
+  ensure_clean "$template/.ai"
+  git -C "$template/.ai" fetch origin main
+  git -C "$template/.ai" checkout --detach "$private_commit"
+  git -C "$template" add -- .ai
+
+  if ! git -C "$template" diff --cached --quiet; then
+    short_commit="${private_commit:0:12}"
+    git -C "$template" commit -m "infra: update private AI skills to $short_commit"
+    git -C "$template" push origin main
+  fi
+}
+
+merge_course() {
+  local course="$1"
+  local branch
+
+  ensure_clean "$course"
+  branch="$(git -C "$course" symbolic-ref --quiet --short HEAD || true)"
+  [ -n "$branch" ] || die "course checkout is detached: $course"
+  git -C "$course" fetch template main
+  if ! git -C "$course" merge --no-ff template/main -m 'Merge template AI infrastructure'; then
+    git -C "$course" merge --abort || true
+    die "template merge failed for $course"
+  fi
+  git -C "$course" submodule update --init .ai
+  "$course/.ai/scripts/ai-sync" sync --workspace "$course"
+  git -C "$course" push origin "$branch"
+}
+
+release() {
+  local workspace="$1"
+  local message="$2"
+  local template="$workspace/teaching-repo-template"
+  local private_commit
+  local course
+  local -a courses=()
+
+  ai_repo="$workspace/.ai"
+  [ -d "$ai_repo/.git" ] || [ -f "$ai_repo/.git" ] || die "private AI checkout not found: $ai_repo"
+  [ -d "$template/.git" ] || [ -f "$template/.git" ] || die "template checkout not found: $template"
+  while IFS= read -r -d '' course; do
+    case "$(basename -- "$course")" in
+      teaching-ai-infrastructure|teaching-repo-template) continue ;;
+    esac
+    courses+=("$course")
+  done < <(find "$workspace" -mindepth 1 -maxdepth 1 -type d \( -name 'hse-*' -o -name 'spbu-*' \) -print0)
+  [ "${#courses[@]}" -gt 0 ] || die "no course checkouts found in $workspace"
+
+  ensure_clean "$template"
+  for course in "${courses[@]}"; do
+    ensure_clean "$course"
+  done
+
+  private_commit="$(commit_private_skills "$message")"
+  update_template "$template" "$private_commit"
+  for course in "${courses[@]}"; do
+    merge_course "$course"
+  done
+
+  printf 'Released private AI skills %s to %s and %s course repositories.\n' \
+    "${private_commit:0:12}" "$template" "${#courses[@]}"
+}
+
+command="${1:-sync}"
+shift || true
+workspace="$(workspace_from_script)"
+message='skills: update shared teaching AI skills'
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --workspace)
+      [ "$#" -ge 2 ] || die 'missing value for --workspace'
+      workspace="$(cd -- "$2" && pwd)"
+      shift 2
+      ;;
+    --message)
+      [ "$#" -ge 2 ] || die 'missing value for --message'
+      message="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+ai_repo="$workspace/.ai"
+
+case "$command" in
+  sync)
+    workspace="$(require_git_root "$workspace")"
+    sync_skills "$workspace"
+    ;;
+  release)
+    release "$workspace" "$message"
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

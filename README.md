@@ -34,10 +34,10 @@ All custom LaTeX classes and packages are GitHub submodules under
 ```sh
 just init
 git submodule update --init .ai
-.ai/scripts/ai-sync sync
+scripts/ai-sync sync
 ```
 
-`.ai/scripts/ai-sync sync` links OpenCode skills from configuration packages and
+`scripts/ai-sync sync` links OpenCode skills from configuration packages and
 the private `.ai/skills/` directory into `.opencode/skills/`. Restart OpenCode
 after syncing or editing skills so the running session reloads them.
 
@@ -72,7 +72,7 @@ just build src/seminars/seminar-01.tex --no-solutions
 just build src/assessments/quiz-01.tex --print
 just preview src/lectures/notes.tex
 
-.ai/scripts/ai-sync sync
+scripts/ai-sync sync
 ```
 
 `just new ...` prompts for template values and creates the next numbered source
