@@ -119,11 +119,11 @@ private_branch() {
     return
   fi
 
-  git -C "$ai_repo" fetch origin main
+  git -C "$ai_repo" fetch origin main >&2
   if git -C "$ai_repo" show-ref --verify --quiet refs/heads/main; then
-    git -C "$ai_repo" switch main
+    git -C "$ai_repo" switch main >&2
   else
-    git -C "$ai_repo" switch --track -c main origin/main
+    git -C "$ai_repo" switch --track -c main origin/main >&2
   fi
 }
 
@@ -141,13 +141,13 @@ commit_private_skills() {
     esac
   done <<< "$private_status"
 
-  git -C "$ai_repo" fetch origin main
-  git -C "$ai_repo" merge --ff-only origin/main
+  git -C "$ai_repo" fetch origin main >&2
+  git -C "$ai_repo" merge --ff-only origin/main >&2
   git -C "$ai_repo" add -- skills
   if ! git -C "$ai_repo" diff --cached --quiet; then
-    git -C "$ai_repo" commit -m "$message"
+    git -C "$ai_repo" commit -m "$message" >&2
   fi
-  git -C "$ai_repo" push origin main
+  git -C "$ai_repo" push origin main >&2
   git -C "$ai_repo" rev-parse HEAD
 }
 
