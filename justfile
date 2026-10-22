@@ -49,6 +49,7 @@ help:
       '' \
       'Helper utilities:' \
       '  just init                         Initialize public Git submodules' \
+      '  just install-hooks               Install repository Git hooks' \
       '  just clean                        Clean auxiliary files for all materials' \
       '  just clean seminar 1              Clean one material target' \
       '  just distclean                    Remove generated LaTeX output'
@@ -119,6 +120,11 @@ publish target *args:
 # intentionally left for the user's normal Git submodule workflow.
 init:
     git submodule update --init --recursive -- src/configuration
+    git config core.hooksPath .githooks
+
+# Configure the repository-managed Git hooks
+install-hooks:
+    git config core.hooksPath .githooks
 
 # Build and open a numbered seminar
 seminar num *flags:

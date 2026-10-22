@@ -35,11 +35,16 @@ All custom LaTeX classes and packages are GitHub submodules under
 just init
 git submodule update --init .bundle
 scripts/ai-sync sync
+just install-hooks
 ```
 
 `scripts/ai-sync sync` links OpenCode skills from configuration packages and
 the private `.bundle/skills/` directory into `.opencode/skills/`. Restart OpenCode
 after syncing or editing skills so the running session reloads them.
+
+`just install-hooks` configures the repository-managed hooks. The pre-push hook
+rejects merge commits in `week-*` and `week/*` branches; it does not affect
+other branches.
 
 ## Metadata
 

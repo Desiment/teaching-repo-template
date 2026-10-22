@@ -1,0 +1,30 @@
+#!/bin/sh
+
+zero_sha=0000000000000000000000000000000000000000
+
+while read -r local_ref local_sha _remote_ref remote_sha; do
+    case "$local_ref" in
+        refs/heads/week-*|refs/heads/week/*)
+            ;;
+        *)
+            continue
+            ;;
+    esac
+
+    [ "$local_sha" = "$zero_sha" ] && continue
+
+    if [ "$remote_sha" = "$zero_sha" ]; then
+        revision_range="$local_sha"
+    else
+        revision_range="$remote_sha..$local_sha"
+    fi
+
+    merge_commits=$(git rev-list --merges "$revision_range")
+    if [ -n "$merge_commits" ]; then
+        echo "Push rejected: merge commits are forbidden in $local_ref." >&2
+        echo "$merge_commits" | sed -n '1,5p' >&2
+        exit 1
+    fi
+done
+
+exit 0
