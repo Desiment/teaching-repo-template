@@ -48,8 +48,9 @@ help:
       '                                   Publish notes-week-03.pdf' \
       '' \
       'Helper utilities:' \
-      '  just init                         Initialize public Git submodules' \
+      '  just init                         Initialize package submodules and hooks' \
       '  just install-hooks               Install repository Git hooks' \
+      '  just branches check               Check the cumulative weekly chain' \
       '  just clean                        Clean auxiliary files for all materials' \
       '  just clean seminar 1              Clean one material target' \
       '  just distclean                    Remove generated LaTeX output'
@@ -116,8 +117,7 @@ preview target *args:
 publish target *args:
     @scripts/tex-target.sh publish "{{ target }}" {{ args }}
 
-# Initialize public Git submodules. The optional private .bundle submodule is
-# intentionally left for the user's normal Git submodule workflow.
+# Initialize the Git-pinned LaTeX configuration packages and repository hooks.
 init:
     git submodule update --init --recursive -- src/configuration
     git config core.hooksPath .githooks
@@ -125,6 +125,10 @@ init:
 # Configure the repository-managed Git hooks
 install-hooks:
     git config core.hooksPath .githooks
+
+# Inspect or propagate the cumulative weekly branch chain
+branches *args:
+    @scripts/week-chain {{ args }}
 
 # Build and open a numbered seminar
 seminar num *flags:

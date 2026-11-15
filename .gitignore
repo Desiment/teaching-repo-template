@@ -34,6 +34,10 @@ _minted*/
 *.pyg
 *.data.minted
 
+## Python test caches
+__pycache__/
+*.py[cod]
+
 ## Editors
 *.bak
 *.swp

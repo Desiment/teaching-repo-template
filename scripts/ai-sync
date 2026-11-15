@@ -1,283 +1,238 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
+"""Inspect or install local OpenCode links to Git-pinned skill sources."""
 
-set -Eeuo pipefail
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
 
-readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly script_repo="$(cd -- "$script_dir/.." && pwd)"
-ai_repo=""
 
-die() {
-  printf 'ai-sync: %s\n' "$*" >&2
-  exit 1
-}
+def git(root, *args):
+    # Do not change the user's Git config to accommodate a differently owned repo.
+    return subprocess.run(
+        ["git", "--no-optional-locks", "-c", f"safe.directory={root}",
+         "-C", str(root), *args],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    ).stdout
 
-usage() {
-  cat <<'EOF'
-Usage:
-  scripts/ai-sync sync [--workspace DIR]
-  scripts/ai-sync release --workspace DIR [--private-repo DIR] [--message MESSAGE]
 
-Commands:
-  sync       Link public TeX skills and private AI skills into .opencode/skills.
-  release    Publish private skill changes, update the template gitlink, and
-             merge the template update into all course repositories in DIR.
+def module_gitlinks(root):
+    links = {}
+    for entry in git(root, "ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        metadata, name = entry.split(b"\t", 1)
+        match = re.fullmatch(rb"160000 ([0-9a-f]{40}) [0-3]", metadata)
+        path = os.fsdecode(name)
+        if match and path.startswith("src/configuration/"):
+            if metadata[-1:] != b"0" or path in links:
+                raise ValueError(f"unmerged or duplicate submodule gitlink: {path}")
+            links[path] = match.group(1).decode("ascii")
+    return links
 
-The release command expects DIR to contain teaching-repo-template and the
-course checkouts. It does not use just and requires clean working trees outside
-the private skills directory.
-EOF
-}
 
-workspace_from_script() {
-  if [ -n "${AI_SYNC_WORKSPACE:-}" ]; then
-    (cd -- "$AI_SYNC_WORKSPACE" && pwd)
-    return
-  fi
+def skill_files(module):
+    for base, dirs, _ in os.walk(module, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d != ".git" and
+                         not (Path(base) / d).is_symlink())
+        if Path(base).name != ".skills":
+            continue
+        for name in dirs:
+            item = Path(base) / name
+            md = item / "SKILL.md"
+            if md.is_file() and not md.is_symlink():
+                yield item
+        dirs[:] = []
 
-  (cd -- "$script_dir/.." && pwd)
-}
 
-git_root() {
-  git -C "$1" rev-parse --show-toplevel 2>/dev/null || true
-}
+def managed_link(value, name, modules):
+    """Recognize only canonical links to Git-tracked source locations."""
+    for module in modules:
+        prefix = f"../../{module}/"
+        if value.startswith(prefix):
+            middle = value[len(prefix):]
+            parts = middle.split("/")
+            if (len(parts) >= 2 and parts[-2:] == [".skills", name]
+                    and all(p not in ("", ".", "..") for p in parts[:-2])):
+                return True
+    return False
 
-require_git_root() {
-  local path="$1"
-  local root
-  root="$(git_root "$path")"
-  [ -n "$root" ] || die "not a Git repository: $path"
-  printf '%s\n' "$root"
-}
 
-ensure_clean() {
-  local repo="$1"
-  [ -z "$(git -C "$repo" status --porcelain)" ] || die "working tree is not clean: $repo"
-}
+def inventory(root):
+    problems = []
+    modules = module_gitlinks(root)
+    sources = {}
+    for path, sha in sorted(modules.items()):
+        module = root / path
+        print(f"SOURCE {path}: gitlink {sha}")
+        if module.is_symlink() or not module.is_dir():
+            problems.append(f"{path}: submodule directory is absent or a symlink")
+            continue
+        if not (module / ".git").exists():
+            problems.append(f"{path}: submodule Git metadata is missing (initialize it first)")
+            continue
+        try:
+            head = git(module, "rev-parse", "--verify", "HEAD").decode().strip()
+        except subprocess.CalledProcessError:
+            problems.append(f"{path}: cannot read submodule HEAD")
+            continue
+        print(f"  HEAD {head}" + (" (matches gitlink)" if head == sha else " (DIFFERS from gitlink)"))
+        if head != sha:
+            problems.append(f"{path}: checkout HEAD differs from Git gitlink; pin/update explicitly")
+        # HEAD alone is not enough: local staged, unstaged, untracked and
+        # ignored skill contents must not be attributed to that Git commit.
+        scope = ":(glob)**/.skills/**"
+        try:
+            dirty = git(module, "status", "--porcelain=v1", "-z",
+                        "--untracked-files=all", "--", scope)
+            # Git status omits ignored files, including a rogue SKILL.md or
+            # unpinned support files inside an otherwise tracked skill.
+            ignored = git(module, "ls-files", "--others", "--ignored",
+                          "--exclude-standard", "-z", "--", scope)
+        except subprocess.CalledProcessError:
+            problems.append(f"{path}: cannot verify skill working-tree state")
+            continue
+        if dirty:
+            for entry in dirty.split(b"\0"):
+                if entry:
+                    print(f"  DIRTY {os.fsdecode(entry)}")
+            problems.append(f"{path}: staged, unstaged or untracked skill changes; "
+                            "sources do not match the pinned Git commit")
+        if ignored:
+            for entry in ignored.split(b"\0"):
+                if entry:
+                    print(f"  IGNORED {os.fsdecode(entry)}")
+            problems.append(f"{path}: ignored skill files are not in the pinned Git commit")
+        for item in skill_files(module):
+            skill_id = item.name
+            print(f"  SKILL {skill_id} <- {item.relative_to(root)}")
+            if skill_id in sources:
+                problems.append(f"conflicting skill ID {skill_id}: "
+                                f"{sources[skill_id].relative_to(root)} and {item.relative_to(root)}")
+            else:
+                sources[skill_id] = item
+    return modules, sources, problems
 
-sync_skills() {
-  local workspace="$1"
-  local skills_dir="$workspace/.opencode/skills"
-  local private_skills="$workspace/.bundle/skills"
-  local skill_md skill_dir skill_name source target current count
-  declare -A sources=()
 
-  mkdir -p -- "$skills_dir"
+def plan(root):
+    modules, sources, problems = inventory(root)
+    skills = root / ".opencode" / "skills"
+    opencode = root / ".opencode"
+    if (opencode.is_symlink() or (opencode.exists() and not opencode.is_dir()) or
+            skills.is_symlink() or (skills.exists() and not skills.is_dir())):
+        problems.append(".opencode/skills: not a real directory (or parent is a symlink)")
+        return [], problems, [], [], []
+    actions = []
+    foreign_broken = []
+    foreign = []
+    legacy_shared = []
+    for name, source in sorted(sources.items()):
+        target = skills / name
+        expected = os.path.relpath(source, skills)
+        if target.is_symlink():
+            actual = os.readlink(target)
+            if actual == expected:
+                print(f"OK       {target.relative_to(root)} -> {expected}")
+            elif actual == f"../../.bundle/skills/{name}":
+                problems.append(f"{target.relative_to(root)}: legacy shared-skill link "
+                                f"{actual!r} conflicts with package skill {expected!r}; kept")
+            elif managed_link(actual, name, modules):
+                print(f"UPDATE   {target.relative_to(root)}: {actual} -> {expected}")
+                actions.append(("update", target, expected, actual))
+            else:
+                problems.append(f"{target.relative_to(root)}: foreign symlink {actual!r} "
+                                f"conflicts with expected {expected!r}")
+        elif target.exists():
+            problems.append(f"{target.relative_to(root)}: existing file/directory blocks "
+                            f"expected link -> {expected}")
+        else:
+            print(f"MISSING  {target.relative_to(root)} -> {expected}")
+            actions.append(("create", target, expected, None))
+    if skills.is_dir():
+        for target in sorted(skills.iterdir()):
+            if not target.is_symlink() or target.name in sources:
+                continue
+            actual = os.readlink(target)
+            if actual == f"../../.bundle/skills/{target.name}":
+                value = f"{target.relative_to(root)} -> {actual}"
+                print(f"LEGACY   {value} (shared skills are global; remove manually after verification)")
+                legacy_shared.append(value)
+                problems.append(f"{target.relative_to(root)}: legacy .bundle skill link; "
+                                "verify the global skill and remove this link manually")
+            elif managed_link(actual, target.name, modules):
+                # A skill missing from the worktree is not proof it was deleted
+                # in the pinned commit (it could be a partial/dirty checkout).
+                print(f"STALE    {target.relative_to(root)} -> {actual} (kept)")
+                problems.append(f"{target.relative_to(root)}: stale managed link; "
+                                "inspect the Git-pinned source and remove manually if obsolete")
+            elif not target.exists():
+                foreign_broken.append(f"{target.relative_to(root)} -> {actual}")
+            else:
+                foreign.append(f"{target.relative_to(root)} -> {actual}")
+    for value in foreign:
+        print(f"FOREIGN  {value} (kept)")
+    for value in foreign_broken:
+        print(f"BROKEN   {value} (foreign; kept)")
+    return actions, problems, foreign_broken, foreign, legacy_shared
 
-  record_skill() {
-    skill_name="$1"
-    source="$2"
-    if [ -n "${sources[$skill_name]+present}" ]; then
-      die "skill name conflict for $skill_name: ${sources[$skill_name]} and $source"
-    fi
-    sources["$skill_name"]="$source"
-  }
 
-  if [ -d "$workspace/src/configuration" ]; then
-    while IFS= read -r -d '' skill_md; do
-      skill_dir="$(dirname -- "$skill_md")"
-      record_skill "$(basename -- "$skill_dir")" "$skill_dir"
-    done < <(find -L "$workspace/src/configuration" -type f -path '*/.skills/*/SKILL.md' -print0)
-  fi
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "release":
+        print("ai-sync: release is disabled: no automatic commit, push, or course merge. "
+              "Use 'scripts/ai-sync check' and distribute reviewed package gitlinks "
+              "through explicit template merges (see README.md).", file=sys.stderr)
+        return 2
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", nargs="?", choices=("check", "sync"), default="check")
+    parser.add_argument("--workspace", type=Path, default=Path(__file__).resolve().parent.parent,
+                        help="repository root (defaults to the directory containing this script)")
+    args = parser.parse_args()
+    root = args.workspace.resolve()
+    try:
+        actual_root = git(root, "rev-parse", "--show-toplevel").decode().strip()
+        if actual_root != str(root):
+            raise ValueError(f"workspace is not the repository root: {root}")
+        actions, problems, foreign_broken, _, _ = plan(root)
+        if args.command == "check":
+            for action, target, _, _ in actions:
+                problems.append(f"{target.relative_to(root)}: needs {action}")
+            problems.extend(f"broken foreign symlink: {link}" for link in foreign_broken)
+        elif not problems:
+            skills = root / ".opencode" / "skills"
+            parent = skills if skills.is_dir() else (
+                skills.parent if skills.parent.exists() else root)
+            if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+                problems.append(f"cannot write OpenCode skills directory: {parent}")
+            if not problems and actions:
+                skills.mkdir(parents=True, exist_ok=True)
+                for action, target, expected, original in actions:
+                    if action == "create":
+                        os.symlink(expected, target)  # never replace a foreign entry
+                    else:  # update a recognizable managed link
+                        if not target.is_symlink() or os.readlink(target) != original:
+                            raise ValueError(f"link changed since preflight: {target}")
+                        with tempfile.TemporaryDirectory(prefix=".ai-sync-", dir=skills) as tmp:
+                            replacement = Path(tmp) / target.name
+                            os.symlink(expected, replacement)
+                            # On failure, the original link remains intact.
+                            if not target.is_symlink() or os.readlink(target) != original:
+                                raise ValueError(f"link changed since preflight: {target}")
+                            os.replace(replacement, target)
+                print(f"Synced {len(actions)} managed skill link change(s).")
+        for problem in problems:
+            print(f"ERROR    {problem}", file=sys.stderr)
+        if problems:
+            return 1
+        print("Check OK: all managed links and Git-pinned sources are consistent." if
+              args.command == "check" else "Sync OK: foreign links preserved.")
+        return 0
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"ai-sync: {error}", file=sys.stderr)
+        return 1
 
-  if [ -d "$private_skills" ]; then
-    while IFS= read -r -d '' skill_md; do
-      skill_dir="$(dirname -- "$skill_md")"
-      record_skill "$(basename -- "$skill_dir")" "$skill_dir"
-    done < <(find -L "$private_skills" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print0)
-  fi
 
-  for target in "$skills_dir"/* "$skills_dir"/.[!.]* "$skills_dir"/..?*; do
-    [ -L "$target" ] || continue
-    skill_name="$(basename -- "$target")"
-    [ -n "${sources[$skill_name]+present}" ] || rm -- "$target"
-  done
-
-  count=0
-  for skill_name in "${!sources[@]}"; do
-    source="${sources[$skill_name]}"
-    target="$skills_dir/$skill_name"
-    current="$(realpath --relative-to="$skills_dir" "$source")"
-
-    if [ -L "$target" ]; then
-      if [ "$(readlink -- "$target")" != "$current" ]; then
-        rm -- "$target"
-        ln -s -- "$current" "$target"
-      fi
-    elif [ -e "$target" ]; then
-      die "refusing to replace existing non-symlink: $target"
-    else
-      ln -s -- "$current" "$target"
-    fi
-    count=$((count + 1))
-  done
-
-  printf 'Synced %s OpenCode skill symlinks.\n' "$count"
-}
-
-private_branch() {
-  local branch
-  branch="$(git -C "$ai_repo" symbolic-ref --quiet --short HEAD || true)"
-  if [ -n "$branch" ]; then
-    [ "$branch" = main ] || die "private AI repository is on '$branch', expected 'main'"
-    return
-  fi
-
-  git -C "$ai_repo" fetch origin main >&2
-  if git -C "$ai_repo" show-ref --verify --quiet refs/heads/main; then
-    git -C "$ai_repo" switch main >&2
-  else
-    git -C "$ai_repo" switch --track -c main origin/main >&2
-  fi
-}
-
-commit_private_skills() {
-  local message="$1"
-  local private_status
-
-  private_branch
-  private_status="$(git -C "$ai_repo" status --porcelain)"
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    case "${line:3}" in
-      skills/*) ;;
-      *) die "private repository has unrelated changes: ${line:3}" ;;
-    esac
-  done <<< "$private_status"
-
-  git -C "$ai_repo" fetch origin main >&2
-  git -C "$ai_repo" merge --ff-only origin/main >&2
-  git -C "$ai_repo" add -- skills
-  if ! git -C "$ai_repo" diff --cached --quiet; then
-    git -C "$ai_repo" commit -m "$message" >&2
-  fi
-  git -C "$ai_repo" push origin main >&2
-  git -C "$ai_repo" rev-parse HEAD
-}
-
-update_template() {
-  local template="$1"
-  local private_commit="$2"
-  local short_commit
-
-  ensure_clean "$template"
-  git -C "$template" fetch origin main
-  git -C "$template" switch main
-  git -C "$template" merge --ff-only origin/main
-  git -C "$template" submodule update --init .bundle
-  ensure_clean "$template/.bundle"
-  git -C "$template/.bundle" fetch origin main
-  git -C "$template/.bundle" checkout --detach "$private_commit"
-  git -C "$template" add -- .bundle
-
-  if ! git -C "$template" diff --cached --quiet; then
-    short_commit="${private_commit:0:12}"
-    git -C "$template" commit -m "infra: update private AI skills to $short_commit"
-    git -C "$template" push origin main
-  fi
-}
-
-merge_course() {
-  local course="$1"
-  local branch
-
-  ensure_clean "$course"
-  branch="$(git -C "$course" symbolic-ref --quiet --short HEAD || true)"
-  [ -n "$branch" ] || die "course checkout is detached: $course"
-  git -C "$course" fetch template main
-  if ! git -C "$course" merge --no-ff template/main -m 'Merge template AI infrastructure'; then
-    git -C "$course" merge --abort || true
-    die "template merge failed for $course"
-  fi
-  git -C "$course" submodule update --init .bundle
-  "$course/scripts/ai-sync" sync --workspace "$course"
-  git -C "$course" push origin "$branch"
-}
-
-release() {
-  local workspace="$1"
-  local message="$2"
-  local template="$workspace/teaching-repo-template"
-  local private_commit
-  local course
-  local -a courses=()
-
-  [ -d "$ai_repo/.git" ] || [ -f "$ai_repo/.git" ] || die "private AI checkout not found: $ai_repo"
-  [ -d "$template/.git" ] || [ -f "$template/.git" ] || die "template checkout not found: $template"
-  while IFS= read -r -d '' course; do
-    case "$(basename -- "$course")" in
-      teaching-bundle|teaching-repo-template) continue ;;
-    esac
-    courses+=("$course")
-  done < <(find "$workspace" -mindepth 1 -maxdepth 1 -type d \( -name 'hse-*' -o -name 'spbu-*' \) -print0)
-  [ "${#courses[@]}" -gt 0 ] || die "no course checkouts found in $workspace"
-
-  ensure_clean "$template"
-  for course in "${courses[@]}"; do
-    ensure_clean "$course"
-  done
-
-  private_commit="$(commit_private_skills "$message")"
-  update_template "$template" "$private_commit"
-  for course in "${courses[@]}"; do
-    merge_course "$course"
-  done
-
-  printf 'Released private AI skills %s to %s and %s course repositories.\n' \
-    "${private_commit:0:12}" "$template" "${#courses[@]}"
-}
-
-command="${1:-sync}"
-shift || true
-workspace="$(workspace_from_script)"
-message='skills: update shared teaching AI skills'
-private_repo=''
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --workspace)
-      [ "$#" -ge 2 ] || die 'missing value for --workspace'
-      workspace="$(cd -- "$2" && pwd)"
-      shift 2
-      ;;
-    --message)
-      [ "$#" -ge 2 ] || die 'missing value for --message'
-      message="$2"
-      shift 2
-      ;;
-    --private-repo)
-      [ "$#" -ge 2 ] || die 'missing value for --private-repo'
-      private_repo="$(cd -- "$2" && pwd)"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      die "unknown argument: $1"
-      ;;
-  esac
-done
-
-if [ -n "$private_repo" ]; then
-  ai_repo="$private_repo"
-else
-  ai_repo="$script_repo/.bundle"
-fi
-
-case "$command" in
-  sync)
-    workspace="$(require_git_root "$workspace")"
-    sync_skills "$workspace"
-    ;;
-  release)
-    release "$workspace" "$message"
-    ;;
-  -h|--help)
-    usage
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
-esac
+if __name__ == "__main__":
+    sys.exit(main())

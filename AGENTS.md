@@ -22,12 +22,17 @@
 ## Commands
 - `just` prints the repo command help.
 - `just init` initializes/updates the public submodules under `src/configuration/`.
-- The optional private `.bundle` submodule is intentionally not initialized by `just`.
 - Run `scripts/ai-sync sync` from the repository root to link skills from
-  `src/configuration/**/.skills/` and `.bundle/skills/` into `.opencode/skills/`.
-- Run `scripts/ai-sync release --workspace <teaching-workspace>` to publish
-  private skill changes and distribute the new `.bundle` gitlink through the
-  template and course repositories.
+  `src/configuration/**/.skills/` into `.opencode/skills/`.
+- Run `scripts/ai-sync check` first to inspect Git-pinned source commits,
+  expected links, conflicts and drift without writing files or Git state.
+- `scripts/ai-sync release` is disabled. Distribute reviewed package commits
+  by explicit template gitlink updates and selected course merges,
+  with confirmation of the exact targets; see README.md. Never distribute
+  changes to every course automatically.
+- Run `just install-hooks` to configure `.githooks/`. Run `just branches check`
+  before changing cumulative weekly branches; the complete workflow is in
+  `docs/BRANCHING.md`.
 - Use `just new <kind> --no-edit` for non-interactive creation: `seminar`, `homework`, `assessment`, `quiz`, or `test`.
 - Use `just new lecture chapter-01/topic.tex --no-edit` for lecture chapter files; the path is relative to `src/lectures/chapters/`.
 - Build a specific file with `just build <path> [latexmk flags]`, for example `just build src/seminars/seminar-01.tex`.
@@ -36,8 +41,24 @@
 - Clean aux files with `just clean`; remove generated LaTeX output with `just distclean`.
 
 ## OpenCode Skills
-- Run `scripts/ai-sync sync` after `just init`, after submodule updates, or after adding/removing skills under configuration packages or `.bundle/skills/`.
-- OpenCode loads skills at startup; restart OpenCode after syncing or editing `.opencode/skills/`.
+- Run `scripts/ai-sync sync` after `just init`, after submodule updates, or after adding/removing skills under configuration packages.
+- Shared teaching skills come from the global teaching profile and are not
+  stored or pinned in course repositories. LaTeX package-specific skills stay
+  in their package repositories and are pinned by package submodule commits,
+  not skill versions.
+- `scripts/ai-sync check` is read-only (exit 0 healthy, exit 1 drift/conflicts).
+  Sync preflights before writing and leaves foreign entries in place; missing
+  required package submodules, mismatched gitlinks, dirty skill sources
+  (staged/unstaged/untracked/ignored, including support files), or conflicting
+  IDs must be fixed deliberately.
+  Stale managed links and legacy links into `.bundle/skills/` are not
+  automatically deleted: verify the intended source before removing a link by
+  hand.
+  Preflight cannot prevent a rare I/O error mid-sync; links may then be
+  partially updated. Run `check`, resolve the error and rerun `sync` to
+  reconcile the remaining managed links; foreign links are preserved.
+- OpenCode V2 watches skill/config changes; use `/reload` if a session does
+  not pick them up. A restart is not normally required.
 - Skill sources under `src/configuration/**/.skills/` are part of configuration packages/submodules; do not patch them during course-material work unless explicitly instructed to maintain that package.
 - `.opencode/skills/` is local project OpenCode configuration and may be modified for course-specific guidance. Sync-created entries are symlinks; replace a symlink with a real skill directory before local customization if you do not want to modify the source package.
 - Use `practice-create-sheet` when creating full seminar, homework, assessment, quiz, or test sheets with document class setup, records files, metadata setters, `\null`, totals, and solution flags.
@@ -50,6 +71,21 @@
 - Use `xamsmath-*` for math package loading, aliases, paired delimiters, operators, braces, autosized operators, math fonts, sets, logic, number systems, algebra, calculus, combinatorics, and probability notation.
 - Use `refsuite-*` for reference loading/configuration, TeX or Lua reference names, short references, bibliography helpers, indexes, zref-clever, and azcref integration.
 - Use `luaboolean-00-usage` when creating TeX booleans from Lua boolean values in LuaLaTeX documents.
+
+## Branch Topology
+- Course `main` owns the scaffold, metadata and reviewed infrastructure; it is
+  not an alias for the latest teaching week.
+- Existing `week-NN` branches form one mutable cumulative chain. Every earlier
+  week must be an ancestor of every later week.
+- When an earlier week changes, use `scripts/week-chain` to create backup refs
+  and recursively rebase all later weeks. Review the dry push plan and use only
+  the script's atomic explicit `--force-with-lease` update; never use plain
+  `--force`.
+- New weekly deltas must be linear. Do not merge weeks or template branches
+  into `week-NN`; template changes enter course `main` through a reviewed merge,
+  then the weekly chain is rebased.
+- `work/*` contains drafts and `backup/*` contains recovery refs. The Git remote
+  belongs to the course owner; Git storage and student delivery are distinct.
 
 ## Build Gotchas
 - `just build` changes into the TeX file's directory so local `.latexmkrc` files set the correct `TEXINPUTS`, `LUAINPUTS`, and `BIBINPUTS`; do not replace it with a root `latexmk <src/file.tex>` unless you want root-output behavior.

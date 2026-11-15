@@ -4,7 +4,7 @@ zero_sha=0000000000000000000000000000000000000000
 
 while read -r local_ref local_sha _remote_ref remote_sha; do
     case "$local_ref" in
-        refs/heads/week-*|refs/heads/week/*)
+        refs/heads/week-*)
             ;;
         *)
             continue
@@ -13,8 +13,42 @@ while read -r local_ref local_sha _remote_ref remote_sha; do
 
     [ "$local_sha" = "$zero_sha" ] && continue
 
+    branch=${local_ref#refs/heads/}
+    case "$branch" in
+        week-[0-9][0-9])
+            ;;
+        *)
+            echo "Push rejected: unsupported weekly branch name $local_ref." >&2
+            exit 1
+            ;;
+    esac
+    suffix=${branch#week-}
+    number=$(printf '%s' "$suffix" | sed 's/^0*//')
+    [ -n "$number" ] || number=0
+    case "$number" in
+        *[!0-9]*|0)
+            echo "Push rejected: unsupported weekly branch name $local_ref." >&2
+            exit 1
+            ;;
+    esac
+
+    if [ "$number" -eq 1 ]; then
+        previous_ref=refs/heads/main
+    else
+        previous=$(printf '%02d' $((number - 1)))
+        previous_ref=refs/heads/week-$previous
+    fi
+    previous_sha=$(git rev-parse --verify "$previous_ref^{commit}" 2>/dev/null) || {
+        echo "Push rejected: previous cumulative branch is missing: $previous_ref." >&2
+        exit 1
+    }
+    if ! git merge-base --is-ancestor "$previous_sha" "$local_sha"; then
+        echo "Push rejected: $previous_ref is not an ancestor of $local_ref." >&2
+        exit 1
+    fi
+
     if [ "$remote_sha" = "$zero_sha" ]; then
-        revision_range="$local_sha"
+        revision_range="$previous_sha..$local_sha"
     else
         revision_range="$remote_sha..$local_sha"
     fi
