@@ -12,7 +12,8 @@ help:
       '  just new <kind> [name] [--no-edit]' \
       '  just build <file|kind number|lecture> [latexmk flags]' \
       '  just <kind> <number> [latexmk flags]' \
-      '  just publish <kind number|lecture> [latexmk flags] [--suffix name]' \
+      '  just publish <kind number> [latexmk flags] [--suffix name]' \
+      '  just publish lecture' \
       '  just clean [file|kind number|lecture]' \
       '  just distclean [file|kind number|lecture]' \
       '' \
@@ -41,11 +42,13 @@ help:
       '  just build lecture' \
       '                                   Build src/lectures/notes.tex' \
       '  just publish seminar 1' \
-      '                                   Copy seminar-01.pdf to project/files/seminars' \
+      '                                   Publish seminar-01-solutions.pdf' \
+      '  just publish seminar 1 --no-solutions' \
+      '                                   Publish seminar-01-no-solutions.pdf' \
       '  just publish quiz 1 --print' \
       '                                   Publish quiz-01-print.pdf' \
-      '  just publish lecture --suffix week-03' \
-      '                                   Publish notes-week-03.pdf' \
+      '  just publish lecture' \
+      '                                   Publish notes.pdf without a suffix' \
       '' \
       'Helper utilities:' \
       '  just init                         Initialize package submodules and hooks' \

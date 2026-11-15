@@ -36,6 +36,8 @@
 - Use `just new <kind> --no-edit` for non-interactive creation: `seminar`, `homework`, `assessment`, `quiz`, or `test`.
 - Use `just new lecture chapter-01/topic.tex --no-edit` for lecture chapter files; the path is relative to `src/lectures/chapters/`.
 - Build a specific file with `just build <path> [latexmk flags]`, for example `just build src/seminars/seminar-01.tex`.
+- Publish seminars with `just publish seminar 1` for `seminar-01-solutions.pdf` or `just publish seminar 1 --no-solutions` for `seminar-01-no-solutions.pdf`; seminar publication does not allow custom suffixes.
+- Publish lecture notes with `just publish lecture`; the only lecture publication name is `notes.pdf`, without suffix or solution-mode variants.
 - Shortcut builds exist: `just seminar 01`, `just homework 01`, `just assessment 01`, `just quiz 01`, `just quiz-print 01`, `just test 01`, and `just lecture notes`.
 - Preview with `just preview <path> [latexmk flags]`.
 - Clean aux files with `just clean`; remove generated LaTeX output with `just distclean`.

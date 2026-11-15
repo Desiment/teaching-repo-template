@@ -132,6 +132,9 @@ just build src/seminars/seminar-01.tex
 just build src/seminars/seminar-01.tex --no-solutions
 just build src/assessments/quiz-01.tex --print
 just preview src/lectures/notes.tex
+just publish seminar 1
+just publish seminar 1 --no-solutions
+just publish lecture
 
 scripts/ai-sync check
 scripts/ai-sync sync
@@ -152,5 +155,16 @@ Local `.latexmkrc` files are intended for editor integrations. They set
 `project/build`, and import shared memoize/build rules from `project/`.
 Solutions are enabled by default for editor builds; use `--no-solutions` to
 disable them and `--print` for quiz print imposition.
+
+Seminar publication names always state whether solutions are present:
+`just publish seminar 1` and `--solutions` publish
+`seminar-01-solutions.pdf`, while `--no-solutions` publishes
+`seminar-01-no-solutions.pdf`. Seminar publication does not accept a custom
+`--suffix` or `--print`; this prevents ambiguous files such as
+`seminar-01.pdf` under `project/files/seminars/`.
+
+Lecture notes are published only as `project/files/notes.pdf` with
+`just publish lecture`. Lecture publication rejects `--suffix`, `--print`, and
+solution-mode flags.
 
 Assessment-related materials live together in `src/assessments/`.

@@ -8,7 +8,8 @@ usage() {
     '  scripts/tex-target.sh build <kind> <number> [latexmk flags]' \
     '  scripts/tex-target.sh build lecture [latexmk flags]' \
     '  scripts/tex-target.sh open <target> [latexmk flags]' \
-    '  scripts/tex-target.sh publish <target> [latexmk flags] [--suffix name]' \
+    '  scripts/tex-target.sh publish <sheet target> [latexmk flags] [--suffix name]' \
+    '  scripts/tex-target.sh publish lecture' \
     '  scripts/tex-target.sh clean [target]' \
     '  scripts/tex-target.sh distclean [target]' >&2
 }
@@ -89,6 +90,9 @@ pdf_path_for() {
   local file="$1"
   local base
   base=$(basename -- "$file" .tex)
+  if [ -n "${SOLUTIONS_MODE:-}" ]; then
+    base="${base}-solutions-${SOLUTIONS_MODE}"
+  fi
   case "$file" in
     src/seminars/*|src/homeworks/*|src/assessments/*|src/lectures/*)
       printf 'project/build/%s.pdf\n' "$base"
@@ -145,6 +149,15 @@ parse_publish_args() {
   publish_suffix=''
   publish_suffix_explicit=0
   publish_flags=()
+  publish_print=0
+  publish_solution_suffix=''
+
+  case "${SOLUTIONS_MODE:-}" in
+    '') ;;
+    include) publish_solution_suffix='solutions' ;;
+    exclude) publish_solution_suffix='no-solutions' ;;
+    *) die "Unknown SOLUTIONS_MODE: '${SOLUTIONS_MODE}'. Must be 'include' or 'exclude'." ;;
+  esac
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -171,18 +184,38 @@ parse_publish_args() {
     return
   fi
 
-  local print=0 solution_suffix='' flag
+  local flag
   for flag in "${publish_flags[@]}"; do
     case "$flag" in
-      --print) print=1 ;;
-      --solutions) solution_suffix='solutions' ;;
-      --no-solutions) solution_suffix='no-solutions' ;;
+      --print) publish_print=1 ;;
+      --solutions) publish_solution_suffix='solutions' ;;
+      --no-solutions) publish_solution_suffix='no-solutions' ;;
     esac
   done
+}
+
+select_publish_suffix() {
+  local file="$1"
+
+  case "$file" in
+    src/seminars/*)
+      [ "$publish_suffix_explicit" -eq 0 ] || \
+        die 'Seminar publications use only the automatic solutions or no-solutions suffix.'
+      [ "$publish_print" -eq 0 ] || die 'Seminar publications do not support --print.'
+      [ -n "$publish_solution_suffix" ] || publish_solution_suffix='solutions'
+      ;;
+    src/lectures/notes.tex)
+      [ "$publish_suffix_explicit" -eq 0 ] || die 'Lecture publication does not support --suffix.'
+      [ "$publish_print" -eq 0 ] || die 'Lecture publication does not support --print.'
+      [ -z "$publish_solution_suffix" ] || die 'Lecture publication does not use a solutions mode.'
+      ;;
+  esac
+
+  [ "$publish_suffix_explicit" -eq 0 ] || return 0
 
   local suffix_parts=()
-  [ "$print" -eq 1 ] && suffix_parts+=(print)
-  [ -n "$solution_suffix" ] && suffix_parts+=("$solution_suffix")
+  [ "$publish_print" -eq 1 ] && suffix_parts+=(print)
+  [ -n "$publish_solution_suffix" ] && suffix_parts+=("$publish_solution_suffix")
 
   if [ "${#suffix_parts[@]}" -gt 0 ]; then
     local IFS=-
@@ -196,13 +229,14 @@ publish_target() {
   local source_pdf publish_dir publish_name destination
 
   parse_publish_args "$@"
+  select_publish_suffix "$file"
   run_latexmk "$file" "${publish_flags[@]}"
 
   source_pdf=$(pdf_path_for "$file")
   [ -f "$source_pdf" ] || die "Expected PDF was not created: $source_pdf"
 
   publish_dir=$(publish_dir_for "$file")
-  publish_name=$(append_suffix "$(basename -- "$source_pdf")" "$publish_suffix")
+  publish_name=$(append_suffix "$(basename -- "$file" .tex).pdf" "$publish_suffix")
   destination="$publish_dir/$publish_name"
 
   mkdir -p "$publish_dir"
@@ -257,7 +291,7 @@ main() {
       open_target "$resolved_file" "${resolved_args[@]}"
       ;;
     publish)
-      [ "$#" -gt 0 ] || die 'Usage: just publish <target> [latexmk flags] [--suffix name]'
+      [ "$#" -gt 0 ] || die 'Usage: just publish <sheet target> [latexmk flags] [--suffix name] | just publish lecture'
       resolved_args=()
       resolve_target "$@"
       publish_target "$resolved_file" "${resolved_args[@]}"
