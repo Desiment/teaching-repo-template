@@ -47,11 +47,7 @@ while read -r local_ref local_sha _remote_ref remote_sha; do
         exit 1
     fi
 
-    if [ "$remote_sha" = "$zero_sha" ]; then
-        revision_range="$previous_sha..$local_sha"
-    else
-        revision_range="$remote_sha..$local_sha"
-    fi
+    revision_range="$previous_sha..$local_sha"
 
     merge_commits=$(git rev-list --merges "$revision_range")
     if [ -n "$merge_commits" ]; then
