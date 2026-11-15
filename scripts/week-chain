@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+"""Inspect and safely propagate changes through cumulative week-NN branches."""
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+
+
+WEEK_RE = re.compile(r"week-(\d{2})")
+
+
+class ChainError(RuntimeError):
+    pass
+
+
+def git(root, *args, check=True):
+    result = subprocess.run(
+        ["git", "--no-optional-locks", "-C", str(root), *args],
+        text=True, capture_output=True,
+    )
+    if check and result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ChainError(f"git {' '.join(args)} failed: {detail}")
+    return result
+
+
+def repository_root(path):
+    result = git(path.resolve(), "rev-parse", "--show-toplevel")
+    return Path(result.stdout.strip()).resolve()
+
+
+def resolve(root, revision):
+    return git(root, "rev-parse", "--verify", f"{revision}^{{commit}}").stdout.strip()
+
+
+def local_ref(root, name):
+    result = git(root, "show-ref", "--verify", "--hash", f"refs/heads/{name}", check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def remote_ref(root, remote, name):
+    result = git(root, "show-ref", "--verify", "--hash",
+                 f"refs/remotes/{remote}/{name}", check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def week_branches(root):
+    output = git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/week-*").stdout
+    parsed = []
+    for name in output.splitlines():
+        match = WEEK_RE.fullmatch(name)
+        if not match:
+            raise ChainError(f"unsupported weekly branch name: {name}")
+        parsed.append((int(match.group(1)), name))
+    parsed.sort()
+    numbers = [number for number, _ in parsed]
+    if len(numbers) != len(set(numbers)):
+        raise ChainError("duplicate numeric week branch")
+    expected = list(range(1, len(numbers) + 1))
+    if numbers != expected:
+        raise ChainError("weekly branches must be contiguous from week-01")
+    return [name for _, name in parsed]
+
+
+def chain(root):
+    if not local_ref(root, "main"):
+        raise ChainError("local main branch is missing")
+    return ["main", *week_branches(root)]
+
+
+def is_ancestor(root, older, newer):
+    return git(root, "merge-base", "--is-ancestor", older, newer, check=False).returncode == 0
+
+
+def merge_commits(root, older, newer):
+    if not is_ancestor(root, older, newer):
+        return []
+    output = git(root, "rev-list", "--merges", f"{older}..{newer}").stdout
+    return output.splitlines()
+
+
+def first_parent_commits(root, older, newer):
+    output = git(root, "rev-list", "--reverse", "--first-parent",
+                 f"{older}..{newer}").stdout
+    return output.splitlines()
+
+
+def commit_parents(root, commit):
+    fields = git(root, "rev-list", "--parents", "-n", "1", commit).stdout.split()
+    return fields[1:]
+
+
+def current_head(root):
+    return resolve(root, "HEAD")
+
+
+def has_unmerged_files(root):
+    return bool(git(root, "ls-files", "--unmerged").stdout)
+
+
+def empty_cherry_pick(root):
+    return (
+        not has_unmerged_files(root)
+        and git(root, "diff", "--quiet", check=False).returncode == 0
+        and git(root, "diff", "--cached", "--quiet", check=False).returncode == 0
+    )
+
+
+def operation_in_progress(root):
+    for name in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
+        value = git(root, "rev-parse", "--git-path", name).stdout.strip()
+        path = Path(value)
+        if not path.is_absolute():
+            path = root / path
+        if path.exists():
+            return name
+    return None
+
+
+def require_clean(root):
+    operation = operation_in_progress(root)
+    if operation:
+        raise ChainError(f"Git operation is in progress ({operation})")
+    status = git(root, "status", "--porcelain=v1", "--untracked-files=all").stdout
+    if status:
+        raise ChainError("working tree is not clean")
+
+
+def checked_out_branches(root):
+    output = git(root, "worktree", "list", "--porcelain").stdout
+    result = {}
+    current_path = None
+    for line in output.splitlines():
+        if line.startswith("worktree "):
+            current_path = Path(line.removeprefix("worktree ")).resolve()
+        elif line.startswith("branch refs/heads/") and current_path:
+            result[line.removeprefix("branch refs/heads/")] = current_path
+    return result
+
+
+def state_directory(root):
+    value = git(root, "rev-parse", "--git-path", "week-chain").stdout.strip()
+    path = Path(value)
+    if not path.is_absolute():
+        path = root / path
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
+
+
+def save_state(path, state):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+    os.replace(temporary, path)
+
+
+def restore_checkout(root, state):
+    restore = state.get("restore_checkout")
+    if not restore or state.get("active_replay") or operation_in_progress(root):
+        return
+    branch = restore.get("branch")
+    if branch:
+        subprocess.run(["git", "-C", str(root), "switch", "--quiet", branch])
+    elif restore.get("head"):
+        subprocess.run(
+            ["git", "-C", str(root), "switch", "--detach", "--quiet", restore["head"]]
+        )
+
+
+def replay_branch(root, path, state, entry, new_parent, old_parent, accept_current):
+    name = entry["name"]
+    active = state.get("active_replay")
+    if active:
+        if active.get("branch") != name:
+            raise ChainError(
+                f"unfinished replay belongs to {active.get('branch')}, not {name}"
+            )
+        branch = git(root, "branch", "--show-current").stdout.strip()
+        if branch:
+            restore_branch = state.get("restore_checkout", {}).get("branch")
+            if branch == restore_branch:
+                git(root, "switch", "--detach", "--quiet", active["tip"])
+            elif current_head(root) != active["tip"]:
+                raise ChainError(
+                    f"unfinished replay for {name} is no longer checked out; "
+                    "restore its recorded tip before continuing"
+                )
+            else:
+                git(root, "switch", "--detach", "--quiet", active["tip"])
+        head = current_head(root)
+        pending = active.get("pending")
+        if pending and head != active["tip"]:
+            if not accept_current:
+                raise ChainError(
+                    "a manually continued cherry-pick is present; inspect it and rerun "
+                    "propagate with --accept-current"
+                )
+            if commit_parents(root, head) != [active["tip"]]:
+                raise ChainError("manually resolved replay commit has an unexpected parent")
+            print(f"ACCEPT {name} {pending[:12]} -> {head[:12]}")
+            active["tip"] = head
+            active["next"] += 1
+            active["pending"] = None
+            save_state(path, state)
+        elif pending:
+            print(f"RETRY {name} {pending[:12]}")
+            active["pending"] = None
+            save_state(path, state)
+        elif head != active["tip"]:
+            raise ChainError(f"detached replay tip changed unexpectedly for {name}")
+    else:
+        commits = first_parent_commits(root, old_parent, entry["original_tip"])
+        print(
+            f"REPLAY {name}: {old_parent[:12]} -> {new_parent[:12]} "
+            f"({len(commits)} first-parent commits)"
+        )
+        git(root, "switch", "--detach", "--quiet", new_parent)
+        active = {
+            "branch": name,
+            "original_tip": entry["original_tip"],
+            "new_parent": new_parent,
+            "old_parent": old_parent,
+            "commits": commits,
+            "next": 0,
+            "tip": new_parent,
+            "pending": None,
+        }
+        state["active_replay"] = active
+        save_state(path, state)
+
+    while active["next"] < len(active["commits"]):
+        commit = active["commits"][active["next"]]
+        active["pending"] = commit
+        save_state(path, state)
+        parents = commit_parents(root, commit)
+        command = ["git", "-C", str(root), "cherry-pick"]
+        if len(parents) > 1:
+            command.extend(("-m", "1"))
+        command.append(commit)
+        print(
+            f"PICK {name} {commit[:12]}"
+            + (" (merge diff vs first parent)" if len(parents) > 1 else "")
+        )
+        result = subprocess.run(command)
+        if result.returncode:
+            if operation_in_progress(root) == "CHERRY_PICK_HEAD" and empty_cherry_pick(root):
+                git(root, "cherry-pick", "--skip")
+                print(f"SKIP-EMPTY {name} {commit[:12]}")
+                active["next"] += 1
+                active["pending"] = None
+                save_state(path, state)
+                continue
+            print(
+                "Propagation stopped. Resolve the cherry-pick and run "
+                f"`git cherry-pick --continue`, or abort it; then rerun: {path}",
+                file=sys.stderr,
+            )
+            return None
+        active["tip"] = current_head(root)
+        active["next"] += 1
+        active["pending"] = None
+        save_state(path, state)
+
+    replay_tip = active["tip"]
+    if not is_ancestor(root, new_parent, replay_tip):
+        raise ChainError(f"replay did not attach {name} to its new parent")
+    if merge_commits(root, new_parent, replay_tip):
+        raise ChainError(f"replayed delta for {name} still contains merge commits")
+    update = git(
+        root, "update-ref", f"refs/heads/{name}", replay_tip,
+        entry["original_tip"], check=False,
+    )
+    if update.returncode:
+        raise ChainError(
+            f"cannot update {name}; its ref moved during replay: "
+            f"{update.stderr.strip() or update.stdout.strip()}"
+        )
+    state.pop("active_replay", None)
+    save_state(path, state)
+    return replay_tip
+
+
+def load_state(path):
+    state = json.loads(path.read_text())
+    if state.get("version") != 1:
+        raise ChainError(f"unsupported state version in {path}")
+    return state
+
+
+def command_check(args):
+    root = repository_root(args.repo)
+    names = chain(root)
+    errors = []
+    print(f"ROOT {root}")
+    print("CHAIN " + " -> ".join(names))
+    for previous, current in zip(names, names[1:]):
+        relation = is_ancestor(root, previous, current)
+        print(f"{'OK' if relation else 'BROKEN'} {previous} -> {current}")
+        if not relation:
+            errors.append(f"{previous} is not an ancestor of {current}")
+            continue
+        merges = merge_commits(root, previous, current)
+        if merges:
+            print(f"LEGACY-MERGES {current}: {' '.join(commit[:12] for commit in merges)}")
+            errors.append(f"{current} adds merge commits after {previous}")
+    for name in names[1:]:
+        local = local_ref(root, name)
+        remote = remote_ref(root, args.remote, name)
+        print(f"REF {name} local={local or '-'} {args.remote}={remote or '-'}")
+    for error in errors:
+        print(f"ERROR {error}", file=sys.stderr)
+    return 1 if errors else 0
+
+
+def command_begin(args):
+    root = repository_root(args.repo)
+    require_clean(root)
+    names = chain(root)
+    if args.changed not in names:
+        raise ChainError(f"branch is not in the week chain: {args.changed}")
+    start = names.index(args.changed)
+    affected = names[start:]
+    if len(affected) < 2:
+        raise ChainError(f"{args.changed} has no later week branches to propagate")
+    old_anchor = resolve(root, args.old_tip or args.changed)
+    original = {name: local_ref(root, name) for name in affected}
+    for index, entry in enumerate(affected[1:], start=1):
+        old_parent = old_anchor if index == 1 else original[affected[index - 1]]
+        if not is_ancestor(root, old_parent, original[entry]):
+            raise ChainError(
+                f"recorded old parent for {entry} is not its ancestor; "
+                "pass the correct --old-tip or repair the source refs first"
+            )
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+    backup_prefix = f"refs/backup/week-chain/{stamp}"
+    commands = ["start"]
+    for name in affected:
+        commands.append(f"create {backup_prefix}/{name} {original[name]}")
+    commands.extend(("prepare", "commit"))
+    result = subprocess.run(
+        ["git", "-C", str(root), "update-ref", "--stdin"],
+        input="\n".join(commands) + "\n", text=True, capture_output=True,
+    )
+    if result.returncode:
+        raise ChainError(f"cannot create backup refs: {result.stderr.strip()}")
+    state = {
+        "version": 1,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "root": str(root),
+        "remote": args.remote,
+        "changed": args.changed,
+        "old_anchor": old_anchor,
+        "backup_prefix": backup_prefix,
+        "branches": [
+            {
+                "name": name,
+                "original_tip": original[name],
+                "old_remote": remote_ref(root, args.remote, name),
+            }
+            for name in affected
+        ],
+        "completed": [],
+        "new_tips": {},
+        "status": "prepared",
+    }
+    path = state_directory(root) / f"{stamp}-{args.changed}.json"
+    save_state(path, state)
+    print(f"STATE {path}")
+    print(f"BACKUP {backup_prefix}")
+    print(f"OLD-ANCHOR {old_anchor}")
+    return 0
+
+
+def command_propagate(args):
+    path = args.state.resolve()
+    state = load_state(path)
+    root = Path(state["root"]).resolve()
+    if repository_root(root) != root:
+        raise ChainError("state repository root no longer matches")
+    require_clean(root)
+    entries = state["branches"]
+    changed = entries[0]["name"]
+    current_changed = local_ref(root, changed)
+    if not current_changed:
+        raise ChainError(f"changed branch disappeared: {changed}")
+    recorded_changed = state.get("changed_tip")
+    if recorded_changed and current_changed != recorded_changed:
+        raise ChainError(f"{changed} moved after propagation started")
+    if not recorded_changed:
+        state["changed_tip"] = current_changed
+        save_state(path, state)
+    if "restore_checkout" not in state:
+        original_branch = git(root, "branch", "--show-current").stdout.strip()
+        state["restore_checkout"] = (
+            {"branch": original_branch} if original_branch
+            else {"head": current_head(root)}
+        )
+        save_state(path, state)
+    checked_out = checked_out_branches(root)
+    for entry in entries[1:]:
+        location = checked_out.get(entry["name"])
+        if location and location != root:
+            raise ChainError(f"{entry['name']} is checked out in another worktree: {location}")
+    completed = set(state.get("completed", []))
+    try:
+        for index, entry in enumerate(entries[1:], start=1):
+            name = entry["name"]
+            parent_name = entries[index - 1]["name"]
+            new_parent = local_ref(root, parent_name)
+            if not new_parent:
+                raise ChainError(f"parent branch disappeared: {parent_name}")
+            old_parent = (state["old_anchor"] if index == 1 else
+                          entries[index - 1]["original_tip"])
+            current = local_ref(root, name)
+            if name in completed:
+                expected = state["new_tips"].get(name)
+                if current != expected:
+                    raise ChainError(f"completed branch changed since propagation: {name}")
+                continue
+            active = state.get("active_replay")
+            if current != entry["original_tip"] and not (
+                active and active.get("branch") == name
+            ):
+                raise ChainError(f"{name} moved since begin")
+            current = replay_branch(
+                root, path, state, entry, new_parent, old_parent,
+                args.accept_current,
+            )
+            if current is None:
+                return 1
+            state.setdefault("completed", []).append(name)
+            state.setdefault("new_tips", {})[name] = current
+            save_state(path, state)
+        state["new_tips"][changed] = state["changed_tip"]
+        state["status"] = "propagated"
+        save_state(path, state)
+        print("Propagation complete.")
+        return 0
+    finally:
+        restore_checkout(root, state)
+
+
+def command_push(args):
+    path = args.state.resolve()
+    state = load_state(path)
+    root = Path(state["root"]).resolve()
+    require_clean(root)
+    if state.get("status") != "propagated":
+        raise ChainError("state has not completed propagation")
+    remote = state["remote"]
+    command = ["git", "-C", str(root), "push", "--atomic"]
+    for entry in state["branches"]:
+        name = entry["name"]
+        expected = entry.get("old_remote") or ""
+        current = local_ref(root, name)
+        recorded = state["new_tips"].get(name)
+        if current != recorded:
+            raise ChainError(f"{name} changed after propagation")
+        command.append(f"--force-with-lease=refs/heads/{name}:{expected}")
+    command.append(remote)
+    command.extend(
+        f"refs/heads/{entry['name']}:refs/heads/{entry['name']}"
+        for entry in state["branches"]
+    )
+    print("PUSH " + shlex.join(command))
+    if not args.execute:
+        print("Dry plan only; pass --execute after reviewing leases and refs.")
+        return 0
+    result = subprocess.run(command)
+    if result.returncode:
+        return result.returncode
+    state["status"] = "pushed"
+    save_state(path, state)
+    return 0
+
+
+def parser():
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument("--repo", type=Path, default=Path.cwd())
+    commands = result.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check", help="validate the local cumulative chain")
+    check.add_argument("--remote", default="origin")
+    check.set_defaults(handler=command_check)
+    begin = commands.add_parser("begin", help="record refs before editing or propagating")
+    begin.add_argument("changed", help="main or week-NN branch whose tip changes")
+    begin.add_argument("--old-tip", help="old parent tip when the changed branch already moved")
+    begin.add_argument("--remote", default="origin")
+    begin.set_defaults(handler=command_begin)
+    propagate = commands.add_parser(
+        "propagate", help="replay every later week's first-parent delta in order"
+    )
+    propagate.add_argument("state", type=Path)
+    propagate.add_argument("--accept-current", action="store_true",
+                           help="accept a manually continued replay commit")
+    propagate.set_defaults(handler=command_propagate)
+    push = commands.add_parser("push", help="print or execute an atomic force-with-lease push")
+    push.add_argument("state", type=Path)
+    push.add_argument("--execute", action="store_true")
+    push.set_defaults(handler=command_push)
+    return result
+
+
+def main():
+    args = parser().parse_args()
+    try:
+        return args.handler(args)
+    except (ChainError, OSError, json.JSONDecodeError) as error:
+        print(f"week-chain: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

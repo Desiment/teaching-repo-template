@@ -33,18 +33,74 @@ All custom LaTeX classes and packages are GitHub submodules under
 
 ```sh
 just init
-git submodule update --init .bundle
+scripts/ai-sync check
 scripts/ai-sync sync
 just install-hooks
+just branches check
 ```
 
-`scripts/ai-sync sync` links OpenCode skills from configuration packages and
-the private `.bundle/skills/` directory into `.opencode/skills/`. Restart OpenCode
-after syncing or editing skills so the running session reloads them.
+Shared teaching skills are provided by the global teaching profile and are not
+stored or pinned in course repositories. Package-specific skills stay beside
+their LaTeX packages in `src/configuration/**/.skills/`.
+`scripts/ai-sync check` is read-only: it prints package Git gitlink commit SHAs,
+checkout HEADs, skill sources, expected links, missing or broken links, and
+skill-ID conflicts. Exit 0 means managed package links match clean Git-pinned
+sources; exit 1 reports drift, dirty skill files, broken links, legacy
+`.bundle` links or conflicts. This includes ignored SKILL.md and support files:
+Git status alone cannot detect them, so they cannot be advertised as pinned
+content. Check does not initialize submodules. `scripts/ai-sync sync`
+preflights the entire set before editing local `.opencode/skills/`: it
+creates/corrects only recognizable managed links and preserves other entries,
+including foreign symlinks. Stale managed links require manual review/removal:
+a missing source file alone does
+not prove that the pinned commit deleted it. Sync refuses to proceed when a
+required package submodule is missing, a checkout differs from its gitlink,
+the available source's skill files have staged, unstaged, untracked or ignored
+changes, IDs collide, or an existing local entry blocks a skill. Resolve such
+issues explicitly; do not delete course-local skills to make sync succeed.
+Preflight catches known conflicts before writes; a rare runtime I/O failure
+can still leave some links updated and others pending. Run `check` and then
+rerun `sync` after resolving the failure; it safely reconciles managed links
+without deleting unrelated entries.
+OpenCode V2 watches skill/config changes; use `/reload` if the current session
+does not pick them up. A restart is not normally necessary.
 
 `just install-hooks` configures the repository-managed hooks. The pre-push hook
-rejects merge commits in `week-*` and `week/*` branches; it does not affect
-other branches.
+checks cumulative `week-NN` ancestry and rejects new merge commits in weekly
+updates. `just init` installs the same hook path after initializing package
+submodules.
+
+Course `main` stores the course scaffold, metadata and reviewed infrastructure;
+it is not the latest teaching week. Mutable cumulative branches `week-NN` form
+one ordered chain. Correcting an earlier week requires a cascading rebase of
+all later weeks. Use `just branches check` and the guarded workflow documented
+in [`docs/BRANCHING.md`](docs/BRANCHING.md). The Git remote belongs to the
+course owner and is separate from delivery of material to students.
+
+## Updating skills safely
+
+Do not use `scripts/ai-sync release`: it is disabled and cannot commit, push,
+or merge courses. Shared teaching skills are maintained in the global teaching
+profile, outside this template. Maintain package-specific skills in their
+respective LaTeX package repositories. Select and review concrete Git commit
+SHAs, never invented skill versions. Once package changes are reviewed and
+published with explicit authorization:
+
+1. In the template, update only the intended package submodule checkouts to
+   their chosen commits; review and commit the resulting gitlink changes. A
+   gitlink records the exact commit SHA.
+2. Review the template commit and update **each selected course individually**
+   by an explicit template merge (not a rebase or automatic workspace-wide
+   release). Review merge conflicts and the selected course's gitlinks.
+3. Initialize/update the selected package submodules in that course. Run
+   `scripts/ai-sync check` to inspect the plan and `scripts/ai-sync sync` to
+   install its local links, then run `check` again. Legacy links into
+   `.bundle/skills/` must be verified and removed manually. Use `/reload` if
+   needed.
+
+Before any commits, pushes, merges, or submodule updates, obtain explicit
+confirmation for the exact repositories and target commits. Sync does not
+publish Git changes, and `.opencode/` is ignored by this template.
 
 ## Metadata
 
@@ -77,7 +133,10 @@ just build src/seminars/seminar-01.tex --no-solutions
 just build src/assessments/quiz-01.tex --print
 just preview src/lectures/notes.tex
 
+scripts/ai-sync check
 scripts/ai-sync sync
+just install-hooks
+just branches check
 ```
 
 `just new ...` prompts for template values and creates the next numbered source
